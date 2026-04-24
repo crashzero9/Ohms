@@ -1,3 +1,8 @@
+# Replit-managed config — Replit's environment guard owns these files;
+# tracking them in git causes pull conflicts. Let Replit manage them locally.
+.replit
+replit.nix
+
 .env
 .env.*
 !.env.example
