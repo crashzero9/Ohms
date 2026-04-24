@@ -1,3 +1,4 @@
+run = ["python", "main.py"]
 entrypoint = "main.py"
 modules = ["python-3.11"]
 
@@ -6,7 +7,8 @@ channel = "stable-24_05"
 
 [deployment]
 deploymentTarget = "reserved_vm"
-run = ["sh", "-c", "pip install -r requirements.txt && python main.py"]
+run = ["python", "main.py"]
+build = ["pip", "install", "-r", "requirements.txt"]
 
 [[ports]]
 localPort = 8080
@@ -15,16 +17,3 @@ externalPort = 80
 [env]
 PYTHONUNBUFFERED = "1"
 PYTHONDONTWRITEBYTECODE = "1"
-
-[workflows]
-runButton = "Start OHMS"
-
-[[workflows.workflow]]
-name = "Start OHMS"
-author = "agent"
-mode = "sequential"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "pip install -r requirements.txt && python main.py"
-waitForPort = 8080
