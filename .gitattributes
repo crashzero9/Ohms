@@ -1,0 +1,20 @@
+# Default: text files auto-normalize to LF on commit, platform-native on checkout.
+* text=auto eol=lf
+
+# Python + docs are LF everywhere.
+*.py   text eol=lf
+*.md   text eol=lf
+*.toml text eol=lf
+*.yaml text eol=lf
+*.yml  text eol=lf
+*.nix  text eol=lf
+*.sh   text eol=lf
+
+# Replit + Windows-friendly files keep their native endings.
+*.ps1  text eol=crlf
+.replit text eol=lf
+
+# Binary-ish (none today, but guard the precedent).
+*.png  binary
+*.jpg  binary
+*.ico  binary

@@ -1,0 +1,19 @@
+run = ["python", "main.py"]
+entrypoint = "main.py"
+modules = ["python-3.11"]
+
+[nix]
+channel = "stable-24_05"
+
+[deployment]
+deploymentTarget = "reserved_vm"
+run = ["python", "main.py"]
+build = ["pip", "install", "-r", "requirements.txt"]
+
+[[ports]]
+localPort = 8080
+externalPort = 80
+
+[env]
+PYTHONUNBUFFERED = "1"
+PYTHONDONTWRITEBYTECODE = "1"

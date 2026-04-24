@@ -1,0 +1,30 @@
+# OHMS — Docker MCP Gateway server entry (TEMPLATE ONLY)
+#
+# Copy this file to ohms-gateway.yaml and populate the real values.
+# NEVER commit the populated file — it is gitignored via `*-gateway.yaml`.
+#
+# Hardening expectations (Phase 2 security review):
+#   1. The populated file MUST be chmod 0600 and owned by the operator.
+#   2. The token below MUST be a laptop-specific, revocable, short-TTL token —
+#      NOT the same token used by the verification script or Phase 3 server-to-server calls.
+#   3. When this token is rotated, also revoke the old one in Replit Secrets.
+#
+# After populating:
+#   chmod 0600 ohms-gateway.yaml
+#   docker mcp profile server add flauraly --server file://$(pwd)/ohms-gateway.yaml
+#   docker mcp gateway run
+
+name: ohms
+title: OHMS — Flauraly Order Hub Management System
+type: remote
+description: Flauraly order management tools hosted on Replit Reserved VM.
+remote:
+  # Use /sse for Docker MCP Gateway (SSE transport). /mcp is reserved for the
+  # Claude API (Streamable HTTP) direct-connect path.
+  url: https://ohms.REPLACE_USERNAME.replit.app/sse
+  transport_type: sse
+  headers:
+    # Issue a dedicated laptop-specific WRITE-scope token. Short TTL.
+    Authorization: "Bearer REPLACE_WITH_LAPTOP_SPECIFIC_TOKEN"
+    # Optional: a client identifier helps OHMS logs attribute calls back to this laptop.
+    X-OHMS-Client: "claude-desktop-<laptop-shortname>"

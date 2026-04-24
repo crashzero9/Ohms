@@ -1,0 +1,29 @@
+.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+.pytest_cache/
+pytest-cache-files-*/
+.venv/
+.replit_local
+.replit_state
+*.log
+
+# Docker MCP Gateway — populated config holds a bearer token (0600)
+*-gateway.yaml
+!*-gateway.example.yaml
+
+# Secret scanning artifacts
+.gitleaks-report.json
+
+# Phase 2 sign-off evidence (screenshots, redacted CLI output) — local only
+docs/phase2_evidence/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
