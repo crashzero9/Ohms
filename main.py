@@ -91,20 +91,42 @@ middleware = [
 middleware = [m for m in middleware if m is not None]
 
 # --- App assembly -----------------------------------------------------------
-# FastMCP exposes two transports; we mount each under the same hardened
-# middleware stack so /sse cannot be used to bypass auth (Phase 2 security
-# review H-item: SSE downgrade risk).
+# FastMCP exposes two transports via streamable_http_app() and sse_app().
+# Both return Starlette apps with INTERNAL path routing:
+#   streamable_http_app() → handles POST /mcp  (Streamable HTTP, MCP 2025-11-05)
+#   sse_app()             → handles GET /sse + POST /messages  (SSE legacy)
 #
-# Compatibility: different FastMCP versions expose these as streamable_http_app()
-# + sse_app(), or as a single get_asgi_app() that serves both. We try the
-# explicit-per-transport API first and fall back to the combined app.
+# CRITICAL: Do NOT use Mount("/mcp", app=streamable_app) — Starlette strips
+# the "/mcp" prefix, so FastMCP's inner app receives "/" and returns 404
+# because its internal route is "/mcp", not "/".
+#
+# Fix: Use a single Mount("/") dispatcher that preserves the full path, letting
+# each FastMCP app see /mcp or /sse as it expects.
+
+
+class _MCPTransportDispatcher:
+    """Routes /mcp* to Streamable HTTP app, /sse* and /messages* to SSE app.
+
+    Mounted at "/" so both inner apps receive the FULL unstripped path and
+    can match their internal routes (/mcp and /sse respectively).
+    """
+
+    def __init__(self, streamable, sse):
+        self.streamable = streamable
+        self.sse = sse
+
+    async def __call__(self, scope, receive, send):
+        path = scope.get("path", "")
+        if path.startswith("/sse") or path.startswith("/messages"):
+            await self.sse(scope, receive, send)
+        else:
+            await self.streamable(scope, receive, send)
+
+
 try:
     streamable_app = mcp.streamable_http_app()
     sse_app = mcp.sse_app()
-    mcp_routes = [
-        Mount("/mcp", app=streamable_app),
-        Mount("/sse", app=sse_app),
-    ]
+    mcp_routes = [Mount("/", app=_MCPTransportDispatcher(streamable_app, sse_app))]
 except AttributeError:
     # Older/combined FastMCP: one ASGI app serves both endpoints internally.
     combined = mcp.get_asgi_app() if hasattr(mcp, "get_asgi_app") else mcp.sse_app()
