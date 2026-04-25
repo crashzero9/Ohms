@@ -64,11 +64,18 @@ except ScopeViolation as exc:
     ) from exc
 
 # --- FastMCP server ---------------------------------------------------------
-mcp = FastMCP(
-    "OHMS",
-    description="Flauraly Order Hub Management System",
-    stateless_http=True,
-)
+# Kwarg compatibility: different mcp SDK versions accept different params.
+#   - 'description' was removed in favour of 'instructions' in some builds.
+#   - 'stateless_http' is a newer setting; older SDKs ignore or reject it.
+# We try the richest constructor first and fall back gracefully.
+_mcp_kwargs: dict = {}
+try:
+    FastMCP("_probe", stateless_http=True)   # test if kwarg is accepted
+    _mcp_kwargs["stateless_http"] = True
+except TypeError:
+    pass  # older SDK — stateless_http not supported; server runs stateful
+
+mcp = FastMCP("OHMS", **_mcp_kwargs)
 mcp.settings.host = "0.0.0.0"
 mcp.settings.port = int(os.environ.get("PORT", 8080))
 
