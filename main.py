@@ -2,7 +2,7 @@
 OHMS — Flauraly Order Hub Management System
 Entry point for the Replit Reserved VM deployment.
 
-This file assembles the FastMCP server, the hardened Starlette middleware stack,
+This file assembles the FastMCP server, the hardened middleware stack,
 and the ASGI application served by uvicorn.
 
 All tool implementations live in ohms/tools.py.
@@ -32,16 +32,13 @@ import os
 import logging
 
 from mcp.server.fastmcp import FastMCP
-from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from starlette.routing import Mount, Route
 
 from ohms import tools  # registers tools on import
 from ohms.auth import BearerAuthMiddleware
 from ohms.correlation import CorrelationIdMiddleware
-from ohms.health import health_endpoint
 from ohms.logging_setup import configure_logging
 from ohms.rate_limit import build_rate_limit_middleware
 from ohms.scope_check import assert_shopify_scopes, ScopeViolation
@@ -65,7 +62,6 @@ except ScopeViolation as exc:
 
 # --- FastMCP server ---------------------------------------------------------
 # Kwarg compatibility: different mcp SDK versions accept different params.
-#   - 'description' was removed in favour of 'instructions' in some builds.
 #   - 'stateless_http' is a newer setting; older SDKs ignore or reject it.
 # We try the richest constructor first and fall back gracefully.
 _mcp_kwargs: dict = {}
@@ -103,49 +99,87 @@ middleware = [m for m in middleware if m is not None]
 #   streamable_http_app() → handles POST /mcp  (Streamable HTTP, MCP 2025-11-05)
 #   sse_app()             → handles GET /sse + POST /messages  (SSE legacy)
 #
-# CRITICAL: Do NOT use Mount("/mcp", app=streamable_app) — Starlette strips
-# the "/mcp" prefix, so FastMCP's inner app receives "/" and returns 404
-# because its internal route is "/mcp", not "/".
+# CRITICAL: Do NOT use Starlette Mount to wrap the FastMCP inner apps.
 #
-# Fix: Use a single Mount("/") dispatcher that preserves the full path, letting
-# each FastMCP app see /mcp or /sse as it expects.
+# Root cause of the double-404:
+#   Mount("/", app=inner) uses path regex ^(?P<path>.*)$ (no leading-slash
+#   anchor, because "/".rstrip("/") == ""). For request path "/mcp/", the
+#   captured group is "/mcp/" (includes the leading slash), so Starlette
+#   computes remaining_path = "/" + "/mcp/" = "//mcp/". FastMCP's inner
+#   Route("/mcp") never matches "//mcp/" → 404. Same corruption for "/sse".
+#
+# Fix: bypass Starlette routing entirely. Use a pure ASGI dispatcher that
+# receives scope["path"] without any prefix stripping, then apply the
+# middleware list directly as ASGI wrappers (the same pattern Starlette
+# uses internally in its build_middleware_stack()).
 
 
-class _MCPTransportDispatcher:
-    """Routes /mcp* to Streamable HTTP app, /sse* and /messages* to SSE app.
+class _OHMSDispatcher:
+    """
+    Root ASGI dispatcher. Receives scope["path"] unmodified — no prefix stripping.
 
-    Mounted at "/" so both inner apps receive the FULL unstripped path and
-    can match their internal routes (/mcp and /sse respectively).
+    Routes:
+      GET  /health        → {"status": "ok"}
+      /sse*, /messages*   → FastMCP SSE transport
+      everything else     → FastMCP Streamable HTTP transport (handles /mcp)
+
+    If sse=None (fallback mode for older SDKs), all non-health traffic goes
+    to the combined streamable app.
     """
 
-    def __init__(self, streamable, sse):
+    def __init__(self, streamable, sse=None):
         self.streamable = streamable
         self.sse = sse
 
     async def __call__(self, scope, receive, send):
+        if scope["type"] == "lifespan":
+            # Forward lifespan to streamable; SSE lifespan not needed separately.
+            await self.streamable(scope, receive, send)
+            return
+
         path = scope.get("path", "")
-        if path.startswith("/sse") or path.startswith("/messages"):
+
+        if path == "/health":
+            body = b'{"status":"ok"}'
+            await send({
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [
+                    [b"content-type", b"application/json"],
+                    [b"content-length", str(len(body)).encode()],
+                ],
+            })
+            await send({"type": "http.response.body", "body": body})
+            return
+
+        if self.sse is not None and (
+            path.startswith("/sse") or path.startswith("/messages")
+        ):
             await self.sse(scope, receive, send)
         else:
             await self.streamable(scope, receive, send)
 
 
 try:
-    streamable_app = mcp.streamable_http_app()
-    sse_app = mcp.sse_app()
-    mcp_routes = [Mount("/", app=_MCPTransportDispatcher(streamable_app, sse_app))]
+    _streamable = mcp.streamable_http_app()
+    _sse = mcp.sse_app()
+    _inner = _OHMSDispatcher(_streamable, sse=_sse)
 except AttributeError:
     # Older/combined FastMCP: one ASGI app serves both endpoints internally.
-    combined = mcp.get_asgi_app() if hasattr(mcp, "get_asgi_app") else mcp.sse_app()
-    mcp_routes = [Mount("/", app=combined)]
+    _combined = mcp.get_asgi_app() if hasattr(mcp, "get_asgi_app") else mcp.sse_app()
+    _inner = _OHMSDispatcher(_combined)
 
-app = Starlette(
-    routes=[
-        Route("/health", health_endpoint, methods=["GET"]),
-        *mcp_routes,
-    ],
-    middleware=middleware,
-)
+# Apply the middleware stack directly as ASGI wrappers around the dispatcher.
+# Reversed so the first entry in `middleware` becomes the outermost layer
+# (first to receive, last to respond) — matching Starlette's own convention.
+app = _inner
+for _mw in reversed(middleware):
+    if hasattr(_mw, "cls"):
+        # Standard Starlette Middleware object
+        app = _mw.cls(app=app, **_mw.kwargs)
+    elif callable(_mw):
+        # Raw ASGI middleware factory (e.g. some rate limiter variants)
+        app = _mw(app)
 
 if __name__ == "__main__":
     import uvicorn
